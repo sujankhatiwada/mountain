@@ -16,7 +16,10 @@
   let dpr = 1;
   let rafId = 0;
   let running = false;
-  let startTime = 0;
+  let segmentStart = 0;
+  let pausedElapsed = 0;
+  let userPaused = false;
+  let lastToggleAt = 0;
 
   const birds = [
     {
@@ -120,8 +123,8 @@
   function frame(now) {
     if (!running) return;
 
-    if (!startTime) startTime = now;
-    const elapsed = now - startTime;
+    if (!segmentStart) segmentStart = now;
+    const elapsed = pausedElapsed + (now - segmentStart);
 
     const { scale, ox, oy } = sliceTransform(width, height);
 
@@ -138,29 +141,61 @@
     rafId = requestAnimationFrame(frame);
   }
 
-  function start() {
-    if (running) return;
-    running = true;
-    startTime = 0;
-    rafId = requestAnimationFrame(frame);
-  }
-
-  function stop() {
+  function pauseAnim() {
+    if (!running) return;
+    const now = performance.now();
+    if (segmentStart) pausedElapsed += now - segmentStart;
+    segmentStart = 0;
     running = false;
     cancelAnimationFrame(rafId);
     rafId = 0;
   }
 
+  function resumeAnim() {
+    if (running || reducedMotion.matches) return;
+    running = true;
+    segmentStart = 0;
+    rafId = requestAnimationFrame(frame);
+  }
+
+  function startFresh() {
+    pausedElapsed = 0;
+    segmentStart = 0;
+    userPaused = false;
+    if (running) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+      running = false;
+    }
+    resumeAnim();
+  }
+
+  function toggleUserPause() {
+    if (reducedMotion.matches) return;
+    const now = Date.now();
+    if (now - lastToggleAt < 400) return;
+    lastToggleAt = now;
+
+    if (running) {
+      userPaused = true;
+      pauseAnim();
+    } else {
+      userPaused = false;
+      resumeAnim();
+    }
+  }
+
   function onVisibility() {
-    if (document.hidden) stop();
-    else start();
+    if (document.hidden) pauseAnim();
+    else if (!userPaused && !reducedMotion.matches) resumeAnim();
   }
 
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   function onMotionPreference() {
     if (reducedMotion.matches) {
-      stop();
+      pauseAnim();
+      pausedElapsed = 0;
       resize();
       const { scale, ox, oy } = sliceTransform(width, height);
       ctx.clearRect(0, 0, width, height);
@@ -171,8 +206,8 @@
         drawBird(ctx, birds[i], 0);
       }
       ctx.restore();
-    } else {
-      start();
+    } else if (!userPaused) {
+      startFresh();
     }
   }
 
@@ -182,4 +217,26 @@
   window.addEventListener('resize', resize, { passive: true });
   document.addEventListener('visibilitychange', onVisibility);
   reducedMotion.addEventListener('change', onMotionPreference);
+
+  document.addEventListener('dblclick', function (e) {
+    e.preventDefault();
+    toggleUserPause();
+  });
+
+  let lastTap = 0;
+  document.addEventListener(
+    'touchend',
+    function (e) {
+      if (e.touches.length > 0) return;
+      const t = Date.now();
+      if (t - lastTap < 350) {
+        lastTap = 0;
+        e.preventDefault();
+        toggleUserPause();
+      } else {
+        lastTap = t;
+      }
+    },
+    { passive: false }
+  );
 })();
